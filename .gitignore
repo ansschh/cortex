@@ -44,6 +44,11 @@ dist/
 build/
 *.egg-info/
 
+# Next.js
+landing/.next/
+landing/out/
+landing/node_modules/
+
 # Audio recordings
 *.wav
 
