@@ -1,0 +1,35 @@
+FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+WORKDIR /app
+
+# System dependencies (audio + Python)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3-pip \
+    portaudio19-dev libsndfile1 alsa-utils pulseaudio \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Symlink python
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python && ln -sf /usr/bin/python3.11 /usr/bin/python3
+
+# Install PyTorch with CUDA
+RUN pip install --no-cache-dir torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+
+# Install Python dependencies
+COPY client/requirements.txt client/requirements.txt
+RUN pip install --no-cache-dir -r client/requirements.txt
+
+# Copy application code
+COPY client/ client/
+COPY shared/ shared/
+COPY run_client.py .
+COPY .env.example .env.example
+
+# Create data directories
+RUN mkdir -p data/models/smart_turn data/models/piper data/speechbrain_model data/speaker_enrollment
+
+# PulseAudio passthrough for audio
+ENV PULSE_SERVER=unix:/tmp/pulse-socket
+
+CMD ["python", "run_client.py"]

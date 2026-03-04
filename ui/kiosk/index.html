@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NOVA — Assistant Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="app">
+        <!-- Status Bar -->
+        <header id="status-bar">
+            <div class="status-left">
+                <span id="assistant-name" class="logo">NOVA</span>
+                <span id="connection-status" class="badge badge-disconnected">Disconnected</span>
+            </div>
+            <div class="status-center">
+                <div id="assistant-state" class="state-indicator">
+                    <span id="state-dot" class="dot dot-idle"></span>
+                    <span id="state-label">Idle</span>
+                </div>
+                <div id="transcript-display" class="transcript"></div>
+            </div>
+            <div class="status-right">
+                <button id="stop-speaking" class="btn-stop" onclick="stopSpeaking()" title="Stop assistant (Esc)" style="display:none;">Stop</button>
+                <button id="mic-toggle" class="btn-mic" onclick="toggleMic()" title="Mute / Unmute microphone">Stop Listening</button>
+                <span id="speaker-badge" class="badge badge-unverified">Not Verified</span>
+                <span id="clock"></span>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main id="main-content">
+            <!-- Left Column: Conversations + Memory -->
+            <aside id="left-column">
+                <section id="conversations-panel">
+                    <h2>Conversations</h2>
+                    <div id="conversations-list" class="card-list"></div>
+                </section>
+                <section id="memory-panel">
+                    <h2>Memories</h2>
+                    <div id="memory-list" class="card-list"></div>
+                </section>
+            </aside>
+
+            <!-- Main Column: Response + Chat + Cards -->
+            <section id="center-column">
+                <div id="assistant-response" class="response-area">
+                    <div class="welcome-message">
+                        <h1>NOVA</h1>
+                        <p>Say the wake word or type below to talk</p>
+                    </div>
+                </div>
+                <!-- Video Feed (hidden by default, toggle with V key) -->
+                <div id="video-panel" class="video-panel" style="display: none;">
+                    <div class="video-header">
+                        <h2>Live Feed</h2>
+                        <button class="btn-mic" onclick="toggleVideoFeed()" id="video-toggle-btn">Stop Feed</button>
+                    </div>
+                    <img id="video-feed" class="video-feed" alt="Camera feed" />
+                </div>
+                <div id="cards-area" class="cards-grid"></div>
+                <!-- Chat Input -->
+                <form id="chat-form" class="chat-input-area" onsubmit="sendChatMessage(event)">
+                    <input type="text" id="chat-input" class="chat-input" placeholder="Type a message..." autocomplete="off" />
+                    <button type="submit" class="btn-send">Send</button>
+                </form>
+            </section>
+
+            <!-- Right Column: Devices + Actions -->
+            <aside id="right-column">
+                <section id="devices-panel">
+                    <h2>Devices <span id="device-count" class="count-badge">0</span></h2>
+                    <div id="devices-list" class="card-list"></div>
+                </section>
+                <section id="pending-panel">
+                    <h2>Pending Actions</h2>
+                    <div id="pending-list" class="card-list"></div>
+                </section>
+            </aside>
+        </main>
+
+        <!-- Toast Container -->
+        <div id="toast-container"></div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+version: "3.8"
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./personality:/app/personality
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Optional: client with GPU passthrough (requires nvidia-container-toolkit)
+  # Uncomment to run client in Docker (most users run client natively for mic access)
+  # client:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.client
+  #   env_file:
+  #     - .env
+  #   environment:
+  #     - SERVER_WS_URL=ws://server:8000/ws/client
+  #   volumes:
+  #     - ./data:/app/data
+  #     - /tmp/.X11-unix:/tmp/.X11-unix
+  #     - /run/user/1000/pulse:/tmp/pulse-socket
+  #   devices:
+  #     - /dev/snd:/dev/snd
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   depends_on:
+  #     server:
+  #       condition: service_healthy
+  #   restart: unless-stopped

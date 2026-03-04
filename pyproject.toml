@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nova-assistant"
+version = "0.1.0"
+description = "NOVA — Dorm Room AI Assistant"
+requires-python = ">=3.11"
+
+[tool.setuptools.packages.find]
+include = ["server*", "client*", "shared*", "personality*"]

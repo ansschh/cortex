@@ -1,0 +1,51 @@
+# Environment
+.env
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.venv3/
+venv/
+env/
+
+# Data files (directory is created at runtime)
+*.db
+*.sqlite
+data/models/
+data/vector_index.bin
+data/chat_log.jsonl
+data/speechbrain_model/
+data/speaker_enrollment/
+
+# Auth tokens
+*_token.json
+*_token_cache.json
+google.json
+
+# Speaker enrollment + ML models
+speaker_enrollment/
+speechbrain_model/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# Audio recordings
+*.wav
+
+# Claude
+.claude/

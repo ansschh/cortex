@@ -1,0 +1,840 @@
+What you’re describing is the jump from:
+
+* **“A catalog of predefined agent roles”** (explorer / builder / tester / debugger)
+  to
+* **“A meta-system that *compiles* new, task-specific agents on demand”** (new role + new I/O schema + new tool plan, created at runtime)
+
+And your core assumption is basically right: in most of these products, “agents” are usually **not** separately fine-tuned models. They’re much more often:
+
+* the **same underlying LLM**
+* wrapped in a **runtime loop** (plan → act → observe → update)
+* with a **role prompt**
+* a **limited tool belt**
+* and a **strict input/output format**
+
+So the real question becomes:
+
+**How do we build an orchestrator that can invent the next “agent type” (prompt + toolset + schema + success criteria) instead of selecting from a fixed menu?**
+
+Below is a practical way to build that, while keeping it robust enough for “Jarvis-style” tasks.
+
+---
+
+## The key idea: stop thinking “agent types”, start thinking “agent manifests”
+
+Instead of hardcoding “ExplorerAgent”, “DebuggerAgent”, etc., you treat an agent as a **data object** the orchestrator can generate:
+
+> **Agent = Manifest + Runtime**
+
+* **Manifest**: a structured specification (goal, tools, I/O schema, constraints, done conditions)
+* **Runtime**: one generic engine that can run *any* manifest (LLM + tools + loop + validation)
+
+This is the same trick that makes “function calling” and “JSON mode” powerful: the orchestrator can synthesize a new “function-like interface” on the fly.
+
+So your “ambiguous types of agents” are really:
+
+✅ **Ephemeral micro-agents** generated at runtime from the task
+instead of
+❌ a finite set of predefined classes
+
+---
+
+## Architecture that actually works in practice
+
+### Component 1: Tool Registry (your universe of possible actions)
+
+You can’t escape this: **agents can only do what tools allow**.
+
+So you define a registry of *primitive* tools, like:
+
+* filesystem read/search/index
+* git operations
+* run tests / shell commands
+* HTTP client (for APIs)
+* browser automation (Playwright / Selenium / “computer use”)
+* credential vault actions (store/retrieve secrets)
+* calendars/email connectors (OAuth-based)
+* “ask user” / approval gates
+
+**Important constraint:**
+A system can dynamically create *new agents*, but it cannot magically access Canvas/Canva/etc without one of:
+
+1. an API connector (OAuth/token), or
+2. browser automation + user login session, or
+3. the user providing credentials.
+
+So the orchestration layer must include an “integration pathway” when tools are missing.
+
+---
+
+### Component 2: Agent Runtime (one engine to run them all)
+
+Every agent—predefined or dynamically generated—runs in the same loop:
+
+1. Read task input + context
+2. Plan next step
+3. Call a tool (or ask user)
+4. Observe tool output
+5. Update state
+6. Repeat until “done condition”
+7. Emit output in required schema
+
+This runtime is generic. The only thing that changes per agent is the **manifest**.
+
+---
+
+### Component 3: Orchestrator = Planner + Compiler + Scheduler
+
+This is the “Jarvis brain” and it does 3 jobs:
+
+1. **Planner**: break the user request into a plan (a DAG, not just a list)
+2. **Compiler**: generate the agent manifests needed to execute the plan
+3. **Scheduler**: run agents concurrently, enforce budgets, manage dependencies
+
+Think of it like a build system:
+
+* tasks = nodes
+* dependencies = edges
+* outputs = artifacts
+* agents = workers
+
+---
+
+### Component 4: Verifier / Critic (mandatory for robustness)
+
+A “Jarvis” that doesn’t verify will confidently lie.
+
+So you add a verification stage that can:
+
+* validate JSON schema outputs
+* cross-check claims against tool outputs
+* run tests
+* enforce “no missing citations” for facts derived from tools
+* catch “done too early” behavior
+
+---
+
+## The Agent Manifest (what the orchestrator generates)
+
+Here’s a concrete shape that works well. You can implement this with JSON Schema + Pydantic (Python) or Zod (TS).
+
+```json
+{
+  "name": "CanvasAssignmentsFetcher",
+  "version": "0.1",
+  "goal": "Retrieve upcoming Canvas assignments for the user and summarize due dates.",
+  "inputs_schema": {
+    "type": "object",
+    "properties": {
+      "time_horizon_days": { "type": "integer", "default": 14 }
+    },
+    "required": []
+  },
+  "outputs_schema": {
+    "type": "object",
+    "properties": {
+      "assignments": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "course": { "type": "string" },
+            "title": { "type": "string" },
+            "due_at": { "type": "string" },
+            "url": { "type": "string" }
+          },
+          "required": ["course", "title", "due_at"]
+        }
+      },
+      "summary": { "type": "string" },
+      "blocking_issue": { "type": ["string", "null"] }
+    },
+    "required": ["assignments", "summary", "blocking_issue"]
+  },
+  "allowed_tools": [
+    "canvas_api",
+    "browser_automation",
+    "ask_user",
+    "secrets_vault"
+  ],
+  "constraints": {
+    "needs_user_approval_for": ["secrets_vault.store", "browser_automation.login"],
+    "max_steps": 25,
+    "no_secret_exfiltration": true
+  },
+  "done_when": [
+    "Assignments retrieved OR blocking_issue is set with a clear next action."
+  ]
+}
+```
+
+**What’s important here:**
+
+* The orchestrator can generate this manifest dynamically.
+* The runtime can execute it generically.
+* The verifier can validate output strictly.
+
+---
+
+## How the orchestrator “creates new agent types” safely
+
+You don’t want it to invent arbitrary, unconstrained prompts and tools. You want it to generate *structured manifests* using **bounded primitives**.
+
+A strong pattern is:
+
+### Step A: Capability mapping (task → required capabilities)
+
+Given: “Check my Canvas assignments”
+
+The orchestrator derives:
+
+* needs: `canvas_access`
+* options:
+
+  1. Canvas API (token/OAuth)
+  2. Browser automation (existing session)
+* missing: `canvas_api` tool configured? token present?
+
+### Step B: Integration plan if capability missing
+
+If no token/tool exists, it generates an *integration subplan*, like:
+
+* Agent: “CanvasIntegrationGuide”
+
+  * ask user which school/Canvas domain
+  * attempt OAuth if supported
+  * else guide user through creating a token
+  * store token in vault (only after explicit approval)
+
+### Step C: Compile agents (generate manifests)
+
+It emits two manifests:
+
+* `CanvasIntegrationGuide` (only if needed)
+* `CanvasAssignmentsFetcher`
+
+### Step D: Execute as a DAG with gates
+
+* integration must complete before fetcher runs
+* token storage requires user approval
+* browser automation login requires user approval
+
+---
+
+## The big missing piece in your Canvas example: dynamic tool creation
+
+You said:
+
+> “I have not predefined my Canvas API… it should generate, package, and deploy a new agent…”
+
+Two distinct things are mixed here:
+
+1. **Create a new agent (prompt + schema + plan)**
+   ✅ very feasible at runtime
+
+2. **Create a new tool/connector to a service that the system can’t access yet**
+   ⚠️ only feasible if you support one of these:
+
+### Option 1: “Universal browser tool” fallback
+
+If you have a robust browser automation tool, the agent can often do the task by navigating UI.
+
+Pros: works even without APIs
+Cons: brittle, needs user login/session, hard to make reliable, can break with UI changes
+
+### Option 2: “HTTP tool + user-provided token”
+
+The agent can discover the API docs (or you provide a connector template), ask for a token, and then call endpoints.
+
+Pros: more reliable once set
+Cons: requires user auth + setup
+
+### Option 3: “Codegen connectors” (advanced)
+
+The system can generate a new connector module at runtime:
+
+* LLM writes code for a Canvas client (or any service)
+* run in a sandbox
+* run tests (smoke test)
+* if passes, register tool into registry
+
+Pros: closest to what you’re imagining (“package and deploy”)
+Cons: security-sensitive; needs sandboxing, review gates, allowlisting, and strict network controls
+
+In practice, most “Jarvis” attempts land on a hybrid:
+
+* browser automation for one-off tasks
+* proper API connectors for repeated tasks
+* codegen connector only with heavy safeguards
+
+---
+
+## Concurrency: how it can “keep answering my other requests”
+
+You need the scheduler to treat work as jobs with priorities:
+
+* interactive chat response: **high priority**
+* background exploration: **medium**
+* long-running integrations: **low**, but persistent
+
+Implementation-wise:
+
+* each agent run is a job with a budget (steps/time/tool calls)
+* the orchestrator can preempt low-priority jobs
+* results stream back as partial artifacts (notes, repo map, etc.)
+
+This is basically “LLM ops”: queue + cancellation + checkpoints.
+
+---
+
+## A robust “general” framework (without pretending it’s magic)
+
+Here’s the simplest structure that scales:
+
+### 1) Primitives (tools)
+
+* BrowserTool
+* HttpTool
+* FileTool
+* ShellTool
+* CalendarTool
+* SecretsTool
+* AskUserTool
+* MemoryStore (vector + structured)
+
+### 2) Generic Agent Runtime
+
+* takes `{manifest, input, context}`
+* executes tool-augmented loop
+* outputs JSON conforming to schema
+
+### 3) Orchestrator with a Compiler
+
+* **Planner**: build DAG
+* **Manifest generator**: synthesize agents needed
+* **Tool selector**: choose allowed tools
+* **Risk engine**: insert approval gates
+
+### 4) Verifier
+
+* schema validation
+* evidence checks
+* regression tests for recurring workflows
+
+### 5) Observability
+
+* logs of tool calls
+* artifacts per node
+* replay/debug mode
+
+That’s the “general Jarvis skeleton”.
+
+---
+
+## Practical implementation pattern (what to build first)
+
+If you try to jump straight to “invent any agent type,” you’ll get chaos. A staged approach works better:
+
+### Phase 1: Fixed runtime + dynamic microagents
+
+* Keep a stable runtime and tool registry
+* Let the orchestrator generate **microagent manifests**
+* But constrain:
+
+  * max tools per agent
+  * max steps
+  * strict I/O schema
+  * mandatory verifier
+
+### Phase 2: Add integration pathways
+
+* Standardize “missing capability” handling:
+
+  * ask user for OAuth
+  * guide token creation
+  * fallback to browser automation
+
+### Phase 3: Optional codegen tools (carefully)
+
+* sandboxed connector generation
+* allowlist domains
+* require explicit approval to “install” a new connector
+* run tests before registration
+
+---
+
+## Why companies still ship “Explorer / Builder / Tester / Debugger” roles
+
+Even if dynamic agent creation is possible, predefined roles are valuable because they give:
+
+* predictable cost
+* predictable tool usage
+* easy safety controls
+* easier evaluation (“did the Explorer do repo mapping correctly?”)
+
+A good orchestrator typically uses both:
+
+* **a few stable archetypes** (for reliability)
+* **dynamic microagents** for edge cases and long tail requests
+
+So the “Jarvis” move is not deleting roles—it’s adding a compiler that can synthesize roles when needed.
+
+---
+
+## If you want, here’s a clean mental model
+
+* **Tools are the instruction set (ISA).**
+* **Agent manifests are programs.**
+* **The orchestrator is a compiler + scheduler.**
+* **The runtime is the CPU.**
+* **The verifier is your test suite / type checker.**
+* **Memory is your filesystem + cache.**
+
+“Dynamic agents” = “compile a new program for this task.”
+
+That framing keeps it general *and* grounded.
+
+---
+
+## If you tell me your intended environment, I can make this concrete
+
+I can tailor a reference design (manifests + runtime loop + verifier + scheduler) depending on what you’re building in:
+
+* Python (FastAPI + Pydantic + Celery/Redis + Playwright)
+* TypeScript (Node + Zod + BullMQ + Playwright)
+* Inside an IDE extension
+* A CLI like Claude Code/Cursor-style
+* A server “Jarvis” that runs continuously
+
+But even without that: the blueprint above is the robust, general framework you’re aiming for—**dynamic agent creation via manifests**, bounded by **tools**, controlled by **verification + permissions**.
+
+
+There are (at least) **two different things** called “OpenClaw” out in the wild:
+
+* a **1990s game (“Claw”) open-source reimplementation** (game-dev / engine work), and
+* the **OpenClaw “clawbot” agent runtime / personal-assistant platform** (multi-channel, tools, skills, orchestration).
+
+Given your earlier agent-orchestration thread (Windsurf/Cursor/Cloud-code style “spawn explorers/builders/testers”), I’m going to cover the **agent runtime** OpenClaw (the one with a local “Gateway”, skills, sub-agents, etc.). ([GitHub][1])
+
+---
+
+## What OpenClaw is in one sentence
+
+OpenClaw is a **local-first agent runtime** where a **single long-lived “Gateway” daemon** receives messages (WhatsApp/Telegram/Discord/etc.), routes them to one or more **isolated agent “brains”**, runs an **agentic loop** (model → tools → streaming output → persistence), and can be extended via **skills** (AgentSkills-compatible folders) and **plugins/hooks**. ([OpenClaw][2])
+
+---
+
+## The big picture architecture
+
+### 1) The Gateway is the orchestrator / control plane
+
+OpenClaw’s core “orchestrator” is the **Gateway**:
+
+* It’s **long-lived** and “owns” the messaging surfaces (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, WebChat, etc.). ([OpenClaw][2])
+* Control-plane clients (mac app / CLI / web UI / automations) connect to it over **WebSocket** (default bind host/port includes `127.0.0.1:18789`). ([OpenClaw][2])
+* The Gateway exposes a **typed WS API**, validates frames against **JSON Schema**, and emits event streams like `agent`, `chat`, `presence`, `health`, `heartbeat`, `cron`. ([OpenClaw][2])
+* It also serves the “canvas” UI surfaces under paths like `/__openclaw__/canvas/` and `/__openclaw__/a2ui/` on the same port. ([OpenClaw][2])
+
+**Why this matters for “clawbots”**: OpenClaw leans into the idea that the orchestrator should be a *real system*, not just prompts—so it has a stable protocol, schemas, event streams, auth, retries, etc. ([OpenClaw][2])
+
+---
+
+### 2) “Agents” are isolated brains with their own workspace + state
+
+OpenClaw’s concept of an agent (a “clawbot brain”) is closer to **a scoped environment** than a new fine-tuned model:
+
+An agent has its own:
+
+* **Workspace** (files + persona + instructions)
+* **State directory** (`agentDir`) for auth profiles, model registry, per-agent config
+* **Session store** (chat history + routing state) ([OpenClaw][3])
+
+And OpenClaw explicitly warns not to reuse state dirs across agents (auth/session collisions), and that credentials are per-agent unless you intentionally copy them. ([OpenClaw][3])
+
+---
+
+## How a message turns into actions (the “agent loop”)
+
+OpenClaw documents the agent loop pretty concretely. A high-level flow is:
+
+1. A message arrives → Gateway routes it to an **agent + session** (more on routing below).
+2. The Gateway runs the **agent loop**:
+   intake → context/prompt assembly → model inference → tool execution → streaming replies → persistence. ([OpenClaw][4])
+3. Internally:
+
+   * `agent` RPC validates params, resolves the session, persists metadata, and returns `{runId, acceptedAt}` quickly. ([OpenClaw][4])
+   * It loads a snapshot of skills, resolves the model defaults, then calls into an embedded runtime (`runEmbeddedPiAgent`, based on **pi-agent-core**). ([OpenClaw][4])
+   * Runs are **serialized per session** (and optionally via a global lane) to prevent tool/session races and keep history consistent. ([OpenClaw][4])
+   * Streaming is bridged into OpenClaw streams (`assistant`, `tool`, `lifecycle`) so tools and partial assistant deltas can be observed and delivered. ([OpenClaw][4])
+
+This is very close to what you described in your “exploration agents / builder agents / debugger agents” mental model—except OpenClaw’s default unit is usually **“one agent runtime + sub-agent sessions”** rather than a zoo of specialized fine-tunes. ([OpenClaw][5])
+
+---
+
+## The “no fine-tuning needed” part: workspace + prompt assembly
+
+OpenClaw is **explicitly built around prompt + tool wiring**, not separate fine-tuned models per role.
+
+### Workspace bootstrap files (injected every run)
+
+OpenClaw expects a set of user-editable workspace files and injects them into the agent context (first turn / every run behavior depends on file type, but the “bootstrap injection” is a core mechanism):
+
+* `AGENTS.md` (operating instructions / “memory-ish”)
+* `SOUL.md` (persona, boundaries, tone)
+* `TOOLS.md` (tool usage notes and conventions)
+* `IDENTITY.md`, `USER.md`, plus a first-run `BOOTSTRAP.md` ritual file, etc. ([OpenClaw][6])
+
+Large files get trimmed/truncated to keep prompts lean, and missing files inject a marker line. ([OpenClaw][6])
+
+### System prompt is assembled each run (and has “modes”)
+
+OpenClaw builds a **custom system prompt** for every run, with fixed sections (tooling, safety reminders, skills list, workspace, docs pointers, time/runtime metadata, etc.). ([OpenClaw][7])
+
+Crucially for your “spawn lots of agents” thought: it supports a **`promptMode`** concept:
+
+* `full` (default): all sections
+* `minimal`: used for sub-agents (drops many sections to save tokens)
+* `none`: basically identity-only ([OpenClaw][7])
+
+So instead of “define 20 agent types,” OpenClaw often does: **one main agent** + **sub-agent runs** with a smaller prompt and controlled toolset. ([OpenClaw][5])
+
+---
+
+## Skills are the extensibility mechanism (your “agent types” analogue)
+
+OpenClaw’s “skills” are basically **capability packs**: a folder centered on a `SKILL.md` file (with YAML frontmatter + instructions), compatible with the AgentSkills format. ([OpenClaw][8])
+
+Key mechanics:
+
+* Skills load from 3 places (with precedence):
+
+  1. bundled with install
+  2. `~/.openclaw/skills` (managed/local)
+  3. `<workspace>/skills` (per-agent) ([OpenClaw][8])
+* They’re filtered / gated based on environment, config, and whether required binaries exist. ([OpenClaw][8])
+* OpenClaw can inject skill-related env vars **per run** (applies env, builds prompt with eligible skills, then restores env after run). ([OpenClaw][8])
+* Skills can be discovered/installed/updated via **ClawHub** (their public registry) using `clawhub install` / `clawhub update`. ([OpenClaw][8])
+
+This is *very* aligned with your intuition: “agents are mostly prompts with structured outputs.” In OpenClaw, a huge amount of specialization comes from **(a)** workspace bootstraps + **(b)** skills instructions + **(c)** tool policy—rather than fine-tuning. ([OpenClaw][7])
+
+---
+
+## Tools: how it actually “does things”
+
+OpenClaw’s agent can only act through **tools** (file read/write, exec, browser, messaging, sessions, etc.), and the tool schemas themselves contribute to context size. ([OpenClaw][9])
+
+### The OpenClaw-managed browser is a good example of “agent-safe” tool design
+
+OpenClaw includes a “managed browser” mode that’s intentionally isolated:
+
+* A dedicated Chrome/Brave/Edge/Chromium profile the agent controls, isolated from your personal browser profile. ([OpenClaw][10])
+* It emphasizes deterministic control: tabs are targeted by `targetId` and it uses dedicated ports (avoids typical `9222` collisions). ([OpenClaw][10])
+* The agent drives the page using **snapshots + refs**, not arbitrary CSS selectors for actions:
+
+  * take `snapshot` → get element refs → `click <ref>`, `type <ref> ...`
+  * refs are not stable across navigations, so you resnapshot when needed ([OpenClaw][10])
+* Upload/download/trace paths are constrained to OpenClaw temp roots. ([OpenClaw][10])
+
+That “snapshot → reference → action” approach is one way OpenClaw avoids a bunch of classic automation footguns (and makes agent behavior more inspectable/reproducible). ([OpenClaw][10])
+
+---
+
+## Multi-agent: how OpenClaw routes and isolates “clawbots”
+
+OpenClaw supports running multiple isolated agents side-by-side and routing inbound messages via deterministic bindings:
+
+* The goal is “multiple isolated agents” + “multiple channel accounts” in one running Gateway, with routing via bindings. ([OpenClaw][3])
+* Each agent has its own workspace + `agentDir` + sessions. ([OpenClaw][3])
+* Routing is “most-specific wins” (peer match, parentPeer match, guild/team match, account match, etc.), with config-order tiebreaking. ([OpenClaw][3])
+
+This is basically the “orchestrator knows schemas for agent types” idea—but implemented as **configurable routing and isolation**, rather than a meta-agent inventing new JSON schemas on the fly. ([OpenClaw][3])
+
+---
+
+## Sub-agents: how OpenClaw “spawns specialized workers”
+
+This is the part that most resembles your “spin up 4 explorers + 3 debuggers” example.
+
+OpenClaw exposes **session tools**, including:
+
+* `sessions_spawn`: spawn a **sub-agent run** in an isolated session and announce results back to the requester channel. ([OpenClaw][5])
+* Sub-agents:
+
+  * start a new `agent:<agentId>:subagent:<uuid>` session
+  * default to a full tool set **minus session tools** (configurable)
+  * cannot recursively call `sessions_spawn` (no infinite spawning) ([OpenClaw][5])
+* There’s also `sessions_send` for sending into another session, with guardrails to prevent endless “ping-pong” loops. ([OpenClaw][5])
+
+So the “specialization” is achieved by:
+
+1. separate session + (often) **minimal prompt mode**, and
+2. a task-specific instruction payload, and
+3. sometimes a restricted tool policy. ([OpenClaw][7])
+
+---
+
+## Memory: how OpenClaw does persistence + recall
+
+OpenClaw draws a sharp line between **context** (what’s in the model window right now) and **memory** (stuff stored on disk and retrieved later). ([OpenClaw][9])
+
+It provides memory tools:
+
+* `memory_search`: semantic recall over indexed snippets
+* `memory_get`: targeted reads of a specific markdown file/line range ([OpenClaw][11])
+
+Memory search can be vector-based and even “hybrid” (BM25 + vector), with optional temporal decay and MMR for diversity (useful when you accumulate lots of daily notes). ([OpenClaw][11])
+
+---
+
+## Security model: what OpenClaw assumes (and what it does *not* magically solve)
+
+OpenClaw is unusually explicit that:
+
+* **Prompt injection is not “solved.”** System-prompt guardrails are *advisory*; hard enforcement comes from tool policy, exec approvals, sandboxing, and channel allowlists. ([OpenClaw][12])
+* DM access is gated via policies like `pairing` (default), `allowlist`, `open`, `disabled`. ([OpenClaw][12])
+* It recommends sandboxing approaches, including Docker-based tool sandboxing, with options for how (or whether) the agent workspace is mounted. ([OpenClaw][12])
+* Skills are treated as **trusted-code boundaries**—if someone can modify skill folders, they can effectively change what the agent can do. ([OpenClaw][12])
+
+### Recent external guidance (worth reading if you’re actually running it)
+
+Microsoft’s Defender team published explicit guidance that the safest posture is **not running OpenClaw on machines with sensitive accounts/data**, and that you should assume the runtime can be influenced by untrusted input and expose the host—so use isolation and tight identity controls if you run it. ([Microsoft][13])
+
+OpenClaw also announced a VirusTotal partnership to scan skills on ClawHub (hashing + upload/analysis + Code Insight + re-scans), explicitly stating this is *defense-in-depth*, not a silver bullet. ([OpenClaw][14])
+
+(Those posts matter because OpenClaw’s power is exactly what you want in a “Jarvis”—but that power also means **the execution boundary becomes the real security boundary**.) ([OpenClaw][12])
+
+---
+
+## Mapping OpenClaw to your “dynamic agent types” question
+
+You asked (paraphrasing): *“How do we build an orchestrator so good it can create its own agent types/schemas on demand, without us predefining exploration/builder/debugger?”*
+
+OpenClaw’s design is a pragmatic answer:
+
+### What OpenClaw does instead of inventing new tool schemas at runtime
+
+1. **Keep a stable core protocol + tool surface** (typed WS API, JSON Schema validation). ([OpenClaw][2])
+2. Express specialization via:
+
+   * **workspace bootstraps** (persona/instructions/memory) ([OpenClaw][6])
+   * **skills** (portable instruction packs teaching tool usage) ([OpenClaw][8])
+   * **sub-agent runs** (sessions_spawn) + smaller prompts + sometimes restricted tools ([OpenClaw][5])
+3. Add “programmability” via **hooks/plugins** at well-defined interception points (before prompt build, before tool call, etc.). ([OpenClaw][4])
+
+So OpenClaw *does* create lots of “workers,” but it creates them as:
+
+* **new sessions** with controlled prompt/tooling,
+* not brand-new runtime types with brand-new schemas.
+
+### If you want “Jarvis-level generality,” OpenClaw suggests a robust pattern
+
+A general-purpose assistant that can suddenly do “Canvas assignments” or “create an API key” safely usually needs:
+
+* **Capability discovery**: “do I have a skill/tool for Canvas?”
+* **Acquisition path**: “if not, do I install a skill, use a browser, or ask the user for OAuth/API keys?”
+* **Execution boundary**: run risky things in an isolated sandbox/VM; keep credentials scoped and rotated ([OpenClaw][12])
+* **Separation of duties**: use sub-agents to read untrusted content and pass summaries, keeping high-authority tools away from untrusted inputs ([OpenClaw][12])
+
+That’s extremely close to the architecture OpenClaw documents.
+
+---
+
+## If you want, I can go deeper in one direction
+
+Pick what you’re most curious about and I’ll drill in:
+
+* **How skills are structured** (metadata/gating/env injection/watchers) ([OpenClaw][8])
+* **How sub-agents are constrained** (promptMode minimal, tool allowlists, session visibility) ([OpenClaw][5])
+* **How the Gateway protocol is typed and validated** (schema/codegen, idempotency, pairing/trust) ([OpenClaw][2])
+* **How to translate this into your own “agent factory” framework** (fixed primitives + dynamic prompts/skills + sandboxing) ([OpenClaw][9])
+
+---
+
+* [TechRadar](https://www.techradar.com/pro/security/microsoft-says-openclaw-is-unsuited-to-run-on-standard-personal-or-enterprise-workstation-so-should-you-be-worried?utm_source=chatgpt.com)
+* [The Verge](https://www.theverge.com/news/874011/openclaw-ai-skill-clawhub-extensions-security-nightmare?utm_source=chatgpt.com)
+* [Tom's Hardware](https://www.tomshardware.com/tech-industry/cyber-security/malicious-moltbot-skill-targets-crypto-users-on-clawhub?utm_source=chatgpt.com)
+
+[1]: https://github.com/openclaw/openclaw "GitHub - openclaw/openclaw: Your own personal AI assistant. Any OS. Any Platform. The lobster way. "
+[2]: https://docs.openclaw.ai/concepts/architecture "Gateway Architecture - OpenClaw"
+[3]: https://docs.openclaw.ai/concepts/multi-agent "Multi-Agent Routing - OpenClaw"
+[4]: https://docs.openclaw.ai/concepts/agent-loop "Agent Loop - OpenClaw"
+[5]: https://docs.openclaw.ai/concepts/session-tool "Session Tools - OpenClaw"
+[6]: https://docs.openclaw.ai/concepts/agent "Agent Runtime - OpenClaw"
+[7]: https://docs.openclaw.ai/concepts/system-prompt "System Prompt - OpenClaw"
+[8]: https://docs.openclaw.ai/tools/skills "Skills - OpenClaw"
+[9]: https://docs.openclaw.ai/concepts/context "Context - OpenClaw"
+[10]: https://docs.openclaw.ai/tools/browser "Browser (OpenClaw-managed) - OpenClaw"
+[11]: https://docs.openclaw.ai/concepts/memory "Memory - OpenClaw"
+[12]: https://docs.openclaw.ai/gateway/security "Security - OpenClaw"
+[13]: https://www.microsoft.com/en-us/security/blog/2026/02/19/running-openclaw-safely-identity-isolation-runtime-risk/ "Running OpenClaw safely: identity, isolation, and runtime risk | Microsoft Security Blog"
+[14]: https://openclaw.ai/blog/virustotal-partnership "OpenClaw Partners with VirusTotal for Skill Security — OpenClaw Blog"
+
+
+
+Right now, “browser-use agents” (LLM-driven web automation) have split into a few clearly different “best” paths:
+
+* **Vision-first computer-use** (sees pixels, clicks coordinates): widest coverage, often highest benchmark scores, but can be slower/costlier and harder to make deterministic.
+* **Accessibility/DOM-first agents** (reads structured page state + uses Playwright/CDP): usually faster/cheaper/more reliable for *web-only* tasks, but can struggle with canvas-heavy / non-accessible UIs.
+* **Hybrid frameworks** (you write some code, the agent fills gaps / self-heals): best maintainability for production workflows, less “fully autonomous”.
+
+Below is what’s *actually SOTA today*, then what I’d use in an agentic framework.
+
+---
+
+## What’s “SOTA” right now? (as of late Feb 2026)
+
+The most common public yardstick is **WebVoyager** (643 tasks across 15 popular live sites; automated evaluation using GPT‑4V as judge in the original setup). ([GitHub][1])
+
+The most referenced public “rollup” of WebVoyager scores is Steel’s browser-agent leaderboard. As of **February 2026**, it lists: ([Steel.dev][2])
+
+* **Surfer 2 (H Company)** — **97.1%** (marked SOTA; self‑reported)
+* **Magnitude** — **93.9%** (self‑reported)
+* **AIME Browser-Use** — **92.34%** (self‑reported)
+* **Browserable** — **90.4%**
+* **Browser Use** — **89.1%**
+* **OpenAI Operator (CUA)** — **87%**
+* **Skyvern 2.0** — **85.85%**
+* **Google Project Mariner** — **83.5%**
+
+### Important reality check about “SOTA”
+
+Web agents are notorious for benchmark noise:
+
+* Many leaderboard entries are **self‑reported**, and comparability can vary by run settings. ([Steel.dev][2])
+* Even Browser Use’s own evaluation fork calls out that **WebVoyager contains outdated/impossible tasks and ambiguous prompts**, and that evaluator quality can be weak (they mention manual correction and “unknown” outcomes). ([GitHub][3])
+
+So: use WebVoyager scores as a *directional* signal, then test on **your** target websites.
+
+---
+
+## “Best of the best” you can actually use in a framework
+
+### If you want the absolute top benchmark score and don’t mind enterprise/proprietary
+
+**Surfer 2 (H Company)** is the listed SOTA on WebVoyager right now (97.1%). It’s explicitly designed as an **orchestrator + sub-agent** architecture separating planning from execution. ([hcompany.ai][4])
+If you can get access commercially (it’s positioned enterprise-first), that’s the current “best accuracy” option.
+
+**But**: if your goal is “drop into my own agentic framework and deeply customize,” you’ll probably prefer open-source building blocks.
+
+---
+
+## Best open-source choices (what I’d actually build on)
+
+### 1) Best open-source “autonomous agent” (end-to-end) by current leaderboard tier
+
+**Magnitude (magnitudedev/browser-agent)**
+
+* Open-source, **vision-first** browser agent.
+* Explicitly supports **Navigate / Interact / Extract / Verify**, and positions itself as a building block for other agents. ([GitHub][5])
+* Has a real **BrowserAgent API** (`startBrowserAgent`, `act`, etc.) and is Playwright-compatible for launch/context options. ([docs.magnitude.run][6])
+
+If you’re building a general agentic framework where tasks are unknown ahead of time, Magnitude is the strongest *open-source* “do the task end-to-end” option in 2026’s ecosystem based on publicly posted performance + its focus on verification.
+
+### 2) Most popular + easiest Python-first autonomous framework
+
+**Browser Use (browser-use/browser-use)**
+
+* Huge adoption (tens of thousands of GitHub stars) and a very straightforward Python “Agent(task=..., llm=..., browser=...)” model. ([GitHub][7])
+* It’s also very explicit about real-world concerns like auth profiles and production scaling via their cloud offering. ([GitHub][7])
+
+If your whole agentic framework is Python and you want the *lowest-friction* integration, Browser Use is still the pragmatic pick—even if it isn’t the highest-scoring open-source entry right now.
+
+### 3) Best JS library alternative (open-source, solid WebVoyager tier)
+
+**Browserable (browserable/browserable)**
+
+* Open-source JS library, explicitly claims **90.4%** on WebVoyager. ([GitHub][8])
+
+---
+
+## “Best” for production reliability (not necessarily most autonomous)
+
+If your goal is: “this must run every day, and when it fails I want debuggable, testable behavior,” then the best-in-class pattern is *hybrid*:
+
+### Stagehand (browserbase/stagehand)
+
+Stagehand’s philosophy is: combine **natural language + code** so you can choose what’s deterministic vs. what’s AI-driven—explicitly positioning itself as more maintainable than pure high-level agents for production. ([GitHub][9])
+
+This is what I’d use for workflows you’ll run repeatedly (invoice downloads, internal ops, QA scripts, etc.) where you want to progressively “compile” the agent’s behavior into code over time.
+
+---
+
+## The sleeper “best component” for an agentic framework: use a tool-layer, not a monolith
+
+If you’re building your own orchestrator (your “Jarvis”), you’ll usually get the best results by treating browser automation as a **tool server** with a stable contract, and swapping “brains” (models/agents) above it.
+
+Two standout options:
+
+### Playwright MCP (microsoft/playwright-mcp)
+
+* Provides browser automation via **structured accessibility snapshots** (often no screenshots needed), explicitly “bypassing the need for visually-tuned models.” ([GitHub][10])
+  This is excellent when you want:
+* model-agnostic browser control
+* deterministic-ish actions
+* lower token/cost footprint vs. screenshot loops
+
+### agent-browser CLI (vercel-labs/agent-browser)
+
+* A fast CLI that supports a **snapshot → element refs (@e2) → click/fill** workflow, designed to be “skill”-friendly for coding agents and usable across assistants. ([GitHub][11])
+  This is extremely useful if your orchestrator spawns many agents: CLI calls keep tool schemas small and interactions crisp.
+
+---
+
+## Don’t forget the model-level “computer use” fallback (for hard UIs)
+
+For “Canvas-like” apps, weird frontends, or anything beyond the browser DOM, you want a vision-based computer-use loop as a fallback:
+
+* **OpenAI Computer Use tool**: model emits actions like `click(x,y)` and `type(text)` in a loop; your runtime executes and returns screenshots. ([OpenAI Developers][12])
+* **Anthropic Computer Use tool**: similar “sandboxed computing environment” tool flow via Claude API. ([Claude][13])
+
+Even if you go DOM/AX-first, having one of these as a “break glass” option massively increases coverage.
+
+---
+
+## My recommendation for *your* agentic framework (robust + general)
+
+If you want “BEST of the BEST” in practice (coverage + reliability + cost control), I would not pick a single library. I’d do a **DOM-first + vision-fallback stack**:
+
+1. **Tool layer (fast, deterministic):** `agent-browser` *or* Playwright MCP
+2. **Primary autonomous agent (open-source):**
+
+   * **Magnitude** if you’re TS/Node-heavy and want top open-source autonomy + verification ([GitHub][5])
+   * **Browser Use** if you’re Python-heavy and want the biggest ecosystem + simplest integration ([GitHub][7])
+3. **Production hardening for repeat workflows:** Stagehand-style “hybridize into code” ([GitHub][9])
+4. **Fallback for non-standard UIs:** OpenAI/Anthropic computer-use loop ([OpenAI Developers][12])
+
+### If you force me to pick ONE today
+
+* **Pick Magnitude** if you want the highest-performing open-source “autonomous browser agent” vibe right now (and you’re okay leaning into vision models + a bit more infra). ([GitHub][5])
+* **Pick Browser Use** if you want the simplest plug-in to a Python orchestration stack and you care more about developer velocity + ecosystem than squeezing the last ~4–5% on a benchmark. ([GitHub][7])
+
+---
+
+## One non-negotiable note (security + safety)
+
+The moment you let agents browse with real accounts, you need strict boundaries:
+
+* per-domain allowlists / deny lists
+* explicit user approval gates for payments, sending messages, changing security settings
+* credential isolation (don’t dump secrets into prompts)
+* strong logging + replay for audits
+
+This becomes the difference between a cool demo and something you can safely run “like Jarvis.”
+
+---
+
+If you tell me what your framework is written in (**Python vs TS/Node**) and whether you need **logged-in workflows + 2FA**, I can give you a concrete “pick these 2–3 components” stack with a clean tool contract (actions, state snapshots, memory, retries) and where each piece fits.
+
+[1]: https://github.com/MinorJerry/WebVoyager "GitHub - MinorJerry/WebVoyager: Code for \"WebVoyager: WebVoyager: Building an End-to-End Web Agent with Large Multimodal Models\""
+[2]: https://leaderboard.steel.dev/?_bhlid=b716574a252a2f977668a64221c9e4ff6fe545b9&utm_campaign=do-you-have-ai-fluency&utm_medium=newsletter&utm_source=www.theneurondaily.com "AI Browser Agent Leaderboard | Steel.dev"
+[3]: https://github.com/browser-use/eval "GitHub - browser-use/eval"
+[4]: https://hcompany.ai/surfer-2 "Surfer 2: The Next Generation of Cross-Platform Computer-Use Agents - H Company"
+[5]: https://github.com/magnitudedev/browser-agent "GitHub - magnitudedev/browser-agent: Open-source, vision-first browser agent"
+[6]: https://docs.magnitude.run/reference/browser-agent "BrowserAgent - Magnitude"
+[7]: https://github.com/browser-use/browser-use "GitHub - browser-use/browser-use:  Make websites accessible for AI agents. Automate tasks online with ease."
+[8]: https://github.com/browserable/browserable "GitHub - browserable/browserable: Open source and self-hostable browser automation library for AI agents"
+[9]: https://github.com/browserbase/stagehand "GitHub - browserbase/stagehand: The AI Browser Automation Framework"
+[10]: https://github.com/microsoft/playwright-mcp "GitHub - microsoft/playwright-mcp: Playwright MCP server"
+[11]: https://github.com/vercel-labs/agent-browser "GitHub - vercel-labs/agent-browser: Browser automation CLI for AI agents"
+[12]: https://developers.openai.com/api/docs/guides/tools-computer-use/ "Computer use | OpenAI API"
+[13]: https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool "Computer use tool - Claude API Docs"
