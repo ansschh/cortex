@@ -9,17 +9,17 @@ declare global {
 }
 
 interface ShaderAnimationProps {
-  /** Speed multiplier for the animation */
   speed?: number;
-  /** Line glow intensity multiplier */
   intensity?: number;
-  /** Custom class name */
+  /** When true, removes sphere mask and uses finer lines */
+  expanded?: boolean;
   className?: string;
 }
 
 export function ShaderAnimation({
   speed = 0.05,
   intensity = 1.0,
+  expanded = false,
   className,
 }: ShaderAnimationProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -79,6 +79,7 @@ export function ShaderAnimation({
       time: { type: "f", value: 1.0 },
       resolution: { type: "v2", value: new THREE.Vector2() },
       intensity: { type: "f", value: intensity },
+      expanded: { type: "f", value: 0.0 },
     };
 
     const vertexShader = `void main() { gl_Position = vec4(position, 1.0); }`;
@@ -88,6 +89,7 @@ export function ShaderAnimation({
       uniform vec2 resolution;
       uniform float time;
       uniform float intensity;
+      uniform float expanded;
 
       float random(in float x) {
         return fract(sin(x) * 1e4);
@@ -96,11 +98,23 @@ export function ShaderAnimation({
       void main(void) {
         vec2 uv = (gl_FragCoord.xy * 2.0 - resolution.xy) / min(resolution.x, resolution.y);
 
-        // Circular fade — sphere mask
         float dist = length(uv);
-        float sphere = smoothstep(1.0, 0.55, dist);
+
+        // Sphere mask: fades out when expanded (ripples reach edges)
+        float sphereScale = 1.0 + (intensity - 1.0) * 0.25;
+        float sphereDist = dist / sphereScale;
+        // When expanded=1, sphere=1 everywhere (no mask). When expanded=0, normal sphere mask.
+        float sphereMask = smoothstep(1.0, 0.45, sphereDist);
+        float sphere = mix(sphereMask, 1.0, expanded);
+
+        // Edge fade for expanded mode — gentle vignette so it doesn't clip hard
+        float edgeFade = mix(1.0, smoothstep(1.8, 0.3, dist), expanded);
+        sphere *= edgeFade;
+
+        vec3 bg = vec3(0.012, 0.027, 0.071);
+
         if (sphere < 0.001) {
-          gl_FragColor = vec4(0.012, 0.027, 0.071, 1.0);
+          gl_FragColor = vec4(bg, 1.0);
           return;
         }
 
@@ -111,14 +125,17 @@ export function ShaderAnimation({
         uvQ.y = floor(uvQ.y * screenSize.y / mosaicScale.y) / (screenSize.y / mosaicScale.y);
 
         float t = time * 0.04 + random(uvQ.x) * 0.4;
-        float lineWidth = 0.0006 * intensity;
+
+        // Lines get much finer when expanded (0.0008 → 0.0002)
+        float baseWidth = mix(0.0008, 0.0002, expanded);
+        float lineWidth = baseWidth * intensity;
 
         vec3 color = vec3(0.0);
         for (int j = 0; j < 3; j++) {
           for (int i = 0; i < 5; i++) {
             float fi = float(i);
             float fj = float(j);
-            color[j] += lineWidth * fi * fi / abs(fract(t - 0.012 * fj + fi * 0.01) * 1.0 - length(uv));
+            color[j] += lineWidth * fi * fi / abs(fract(t - 0.012 * fj + fi * 0.01) * 1.0 - dist);
           }
         }
 
@@ -128,13 +145,13 @@ export function ShaderAnimation({
         aurora.g = color[1] * 0.6 + color[2] * 0.45;
         aurora.b = color[2] * 1.0 + color[1] * 0.35;
 
-        // Core glow
-        float coreGlow = exp(-dist * 3.2) * 0.1 * intensity;
+        // Core glow — reduced when expanded
+        float glowStrength = mix(0.15, 0.04, expanded);
+        float coreGlow = exp(-dist * 2.5) * glowStrength * intensity;
         aurora += vec3(coreGlow * 0.75, coreGlow * 0.88, coreGlow);
 
         aurora *= sphere;
 
-        vec3 bg = vec3(0.012, 0.027, 0.071);
         gl_FragColor = vec4(bg + aurora, 1.0);
       }
     `;
@@ -156,12 +173,16 @@ export function ShaderAnimation({
 
     const onResize = () => {
       const rect = container.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
       renderer.setSize(rect.width, rect.height);
       uniforms.resolution.value.x = renderer.domElement.width;
       uniforms.resolution.value.y = renderer.domElement.height;
     };
     onResize();
     window.addEventListener("resize", onResize);
+
+    const resizeObserver = new ResizeObserver(() => onResize());
+    resizeObserver.observe(container);
 
     const animate = () => {
       sceneRef.current.animationId = requestAnimationFrame(animate);
@@ -171,12 +192,34 @@ export function ShaderAnimation({
     animate();
   };
 
-  /** Expose intensity setter for parent to drive reactivity */
+  // Drive intensity uniform
   useEffect(() => {
     if (sceneRef.current.uniforms) {
       sceneRef.current.uniforms.intensity.value = intensity;
     }
   }, [intensity]);
+
+  // Drive expanded uniform (smooth transition handled by animation loop)
+  useEffect(() => {
+    const target = expanded ? 1.0 : 0.0;
+    if (!sceneRef.current.uniforms) return;
+
+    // Animate the expanded uniform smoothly
+    let current = sceneRef.current.uniforms.expanded.value;
+    let raf: number;
+    const ease = () => {
+      current += (target - current) * 0.04; // slow, smooth transition
+      if (Math.abs(current - target) < 0.005) {
+        current = target;
+      }
+      sceneRef.current.uniforms.expanded.value = current;
+      if (current !== target) {
+        raf = requestAnimationFrame(ease);
+      }
+    };
+    raf = requestAnimationFrame(ease);
+    return () => cancelAnimationFrame(raf);
+  }, [expanded]);
 
   return <div ref={containerRef} className={className ?? "w-full h-full absolute"} />;
 }
