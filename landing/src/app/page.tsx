@@ -4,11 +4,14 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { ShaderAnimation } from "@/components/ui/shader-lines";
 import { Starfield } from "@/components/ui/starfield";
 import { GlassEffect, GlassFilter } from "@/components/ui/liquid-glass";
-import { Github, Mic, Send, Square, ArrowLeft } from "lucide-react";
+import { ProjectsPanel } from "@/components/ui/projects";
+import { Github, Mic, Send, Square, ArrowLeft, FolderOpen } from "lucide-react";
 import { speakElevenLabs, type AudioReactiveHandle } from "@/lib/elevenlabs";
 import { chat } from "@/lib/llm";
 
-const EXPAND_THRESHOLD = 4; // messages before expanding to full chat
+const EXPAND_THRESHOLD = 4;
+
+type View = "landing" | "chat" | "projects";
 
 interface Message {
   role: "user" | "assistant";
@@ -19,7 +22,7 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatOpen, setChatOpen] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  const [view, setView] = useState<View>("landing");
   const [manualCollapse, setManualCollapse] = useState(false);
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
@@ -32,17 +35,19 @@ export default function Home() {
   const audioHandleRef = useRef<AudioReactiveHandle | null>(null);
   const animFrameRef = useRef<number | null>(null);
 
+  const isExpanded = view === "chat" || view === "projects";
+
   // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Auto-expand when chat gets long (unless user manually collapsed)
+  // Auto-expand to chat when messages get long
   useEffect(() => {
-    if (messages.length >= EXPAND_THRESHOLD && !expanded && !manualCollapse) {
-      setExpanded(true);
+    if (messages.length >= EXPAND_THRESHOLD && view === "landing" && !manualCollapse) {
+      setView("chat");
     }
-  }, [messages, expanded, manualCollapse]);
+  }, [messages, view, manualCollapse]);
 
   /* ── Audio-reactive loop ─────────────────────────────────────── */
 
@@ -186,12 +191,12 @@ export default function Home() {
     else startListening();
   }, [listening, startListening, stopListening]);
 
-  const collapseChat = useCallback(() => {
-    setExpanded(false);
+  const goBack = useCallback(() => {
+    setView("landing");
     setManualCollapse(true);
   }, []);
 
-  /* ── Input bar (shared between both modes) ───────────────────── */
+  /* ── Input bar ───────────────────────────────────────────────── */
   const inputBar = (
     <div className="flex items-center gap-2 bg-slate-900/50 backdrop-blur-md border border-slate-700/40 rounded-2xl px-4 py-2.5 netflix-transition">
       <input
@@ -211,7 +216,6 @@ export default function Home() {
         className="flex-1 bg-transparent text-sm text-slate-200 placeholder-slate-500 outline-none"
         style={{ fontWeight: 300 }}
       />
-
       <button
         onClick={toggleMic}
         className={`p-2 rounded-full transition-colors ${
@@ -222,7 +226,6 @@ export default function Home() {
       >
         {listening ? <Square size={16} /> : <Mic size={16} />}
       </button>
-
       <button
         onClick={() => handleSend()}
         disabled={!input.trim() || thinking}
@@ -233,7 +236,6 @@ export default function Home() {
     </div>
   );
 
-  /* ── Status text ─────────────────────────────────────────────── */
   const statusText = (listening || speaking || thinking) ? (
     <p className="text-center text-xs text-slate-500 mt-2 animate-pulse" style={{ fontWeight: 300 }}>
       {listening ? "Listening..." : thinking ? "Thinking..." : "Speaking..."}
@@ -245,61 +247,55 @@ export default function Home() {
       <GlassFilter />
       <Starfield />
 
-      {/* ═══ AURORA — always full-screen, sphere mask handled by shader ═══ */}
+      {/* ═══ AURORA ═══ */}
       <div
         className="absolute inset-0 z-[1] netflix-transition-slow"
-        style={{
-          opacity: expanded ? 0.35 : 1,
-        }}
+        style={{ opacity: isExpanded ? 0.35 : 1 }}
       >
-        {/* Centered sphere wrapper — scales to fill when expanded */}
         <div
           className="absolute netflix-transition-slow"
           style={{
-            top: expanded ? "-25vh" : "50%",
-            left: expanded ? "-25vw" : "50%",
-            width: expanded ? "150vw" : "420px",
-            height: expanded ? "150vh" : "420px",
-            transform: expanded ? "none" : "translate(-50%, calc(-50% - 80px))",
+            top: isExpanded ? "-25vh" : "50%",
+            left: isExpanded ? "-25vw" : "50%",
+            width: isExpanded ? "150vw" : "420px",
+            height: isExpanded ? "150vh" : "420px",
+            transform: isExpanded ? "none" : "translate(-50%, calc(-50% - 80px))",
           }}
         >
           <ShaderAnimation
             speed={0.05}
             intensity={intensity}
-            expanded={expanded}
+            expanded={isExpanded}
             className="w-full h-full absolute inset-0"
           />
         </div>
-        {/* Glow */}
         <div
           className="absolute pointer-events-none netflix-transition-slow"
           style={{
             top: "50%",
             left: "50%",
-            width: expanded ? "100vw" : "500px",
-            height: expanded ? "100vh" : "500px",
-            transform: expanded
+            width: isExpanded ? "100vw" : "500px",
+            height: isExpanded ? "100vh" : "500px",
+            transform: isExpanded
               ? "translate(-50%, -50%)"
               : `translate(-50%, calc(-50% - 80px)) scale(${1.15 + (intensity - 1) * 0.2})`,
             background: "radial-gradient(circle, rgba(56,189,248,0.06) 0%, transparent 70%)",
-            borderRadius: expanded ? "0" : "50%",
+            borderRadius: isExpanded ? "0" : "50%",
           }}
         />
       </div>
 
-      {/* ═══ LANDING VIEW (fades out when expanded) ═══ */}
+      {/* ═══ LANDING VIEW ═══ */}
       <div
         className="netflix-transition-slow absolute inset-0 z-10 flex flex-col items-center justify-center pointer-events-none"
         style={{
-          opacity: expanded ? 0 : 1,
-          transform: expanded ? "scale(0.9)" : "scale(1)",
-          pointerEvents: expanded ? "none" : "auto",
+          opacity: view === "landing" ? 1 : 0,
+          transform: view === "landing" ? "scale(1)" : "scale(0.9)",
+          pointerEvents: view === "landing" ? "auto" : "none",
         }}
       >
-        {/* Spacer for sphere */}
         <div className="w-[340px] h-[340px] sm:w-[420px] sm:h-[420px]" />
 
-        {/* Branding */}
         <div className="text-center mt-6">
           <h1
             className="text-5xl sm:text-6xl font-display tracking-wider text-white/90"
@@ -315,9 +311,8 @@ export default function Home() {
           </p>
         </div>
 
-        {/* Compact chat */}
         <div className="w-full max-w-md px-4 mt-6">
-          {chatOpen && messages.length > 0 && !expanded && (
+          {chatOpen && messages.length > 0 && view === "landing" && (
             <div className="mb-3 max-h-48 overflow-y-auto space-y-3 chat-scroll">
               {messages.map((m, i) => (
                 <div
@@ -341,7 +336,7 @@ export default function Home() {
                   )}
                 </div>
               ))}
-              <div ref={!expanded ? messagesEndRef : undefined} />
+              <div ref={view === "landing" ? messagesEndRef : undefined} />
             </div>
           )}
           {inputBar}
@@ -349,32 +344,26 @@ export default function Home() {
         </div>
       </div>
 
-      {/* ═══ EXPANDED CHAT VIEW (fades in when expanded) ═══ */}
+      {/* ═══ EXPANDED CHAT VIEW ═══ */}
       <div
         className="netflix-transition-slow absolute inset-0 z-20 flex flex-col"
         style={{
-          opacity: expanded ? 1 : 0,
-          transform: expanded ? "translateY(0)" : "translateY(40px)",
-          pointerEvents: expanded ? "auto" : "none",
+          opacity: view === "chat" ? 1 : 0,
+          transform: view === "chat" ? "translateY(0)" : "translateY(40px)",
+          pointerEvents: view === "chat" ? "auto" : "none",
         }}
       >
-        {/* Header bar */}
         <div className="flex items-center justify-between px-6 pt-5 pb-3">
           <button
-            onClick={collapseChat}
+            onClick={goBack}
             className="flex items-center gap-2 text-slate-400 hover:text-slate-200 transition-colors"
           >
             <ArrowLeft size={18} />
             <span className="text-sm" style={{ fontWeight: 300 }}>Back</span>
           </button>
-
-          <h2
-            className="text-lg tracking-wider text-white/80"
-            style={{ fontWeight: 300 }}
-          >
+          <h2 className="text-lg tracking-wider text-white/80" style={{ fontWeight: 300 }}>
             AEON
           </h2>
-
           <a
             href="https://github.com/ansschh/cortex"
             target="_blank"
@@ -385,7 +374,6 @@ export default function Home() {
           </a>
         </div>
 
-        {/* Messages area */}
         <div
           ref={chatContainerRef}
           className="flex-1 overflow-y-auto px-6 py-4 space-y-4 chat-scroll"
@@ -397,9 +385,7 @@ export default function Home() {
               style={{ animationDelay: `${Math.min(i * 0.06, 0.3)}s` }}
             >
               {m.role === "assistant" ? (
-                <GlassEffect
-                  className="rounded-2xl max-w-[80%] sm:max-w-[70%]"
-                >
+                <GlassEffect className="rounded-2xl max-w-[80%] sm:max-w-[70%]">
                   <div className="px-4 py-3 text-sm text-slate-100" style={{ fontWeight: 300 }}>
                     {m.text}
                   </div>
@@ -429,31 +415,55 @@ export default function Home() {
             </div>
           )}
 
-          <div ref={expanded ? messagesEndRef : undefined} />
+          <div ref={view === "chat" ? messagesEndRef : undefined} />
         </div>
 
-        {/* Input bar — bottom */}
         <div className="px-6 pb-6 pt-2">
           {inputBar}
           {statusText}
         </div>
       </div>
 
-      {/* GitHub + credit (only in landing mode) */}
-      <a
-        href="https://github.com/ansschh/cortex"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="netflix-transition fixed bottom-6 right-6 z-30 flex items-center gap-2 text-sm text-slate-500 hover:text-slate-300 transition-colors"
+      {/* ═══ PROJECTS VIEW ═══ */}
+      <div
+        className="netflix-transition-slow absolute inset-0 z-20 flex flex-col"
         style={{
-          opacity: expanded ? 0 : 1,
-          pointerEvents: expanded ? "none" : "auto",
+          opacity: view === "projects" ? 1 : 0,
+          transform: view === "projects" ? "translateY(0)" : "translateY(40px)",
+          pointerEvents: view === "projects" ? "auto" : "none",
         }}
       >
-        <Github size={18} />
-        <span className="hidden sm:inline" style={{ fontWeight: 300 }}>GitHub</span>
-      </a>
+        <ProjectsPanel onClose={goBack} />
+      </div>
 
+      {/* ═══ BOTTOM BAR (landing only) ═══ */}
+      <div
+        className="netflix-transition fixed bottom-6 left-0 right-0 z-30 flex items-center justify-between px-6"
+        style={{
+          opacity: view === "landing" ? 1 : 0,
+          pointerEvents: view === "landing" ? "auto" : "none",
+        }}
+      >
+        {/* Projects button */}
+        <button
+          onClick={() => setView("projects")}
+          className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-300 transition-colors"
+        >
+          <FolderOpen size={18} />
+          <span className="hidden sm:inline" style={{ fontWeight: 300 }}>Projects</span>
+        </button>
+
+        {/* GitHub */}
+        <a
+          href="https://github.com/ansschh/cortex"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-300 transition-colors"
+        >
+          <Github size={18} />
+          <span className="hidden sm:inline" style={{ fontWeight: 300 }}>GitHub</span>
+        </a>
+      </div>
     </main>
   );
 }
