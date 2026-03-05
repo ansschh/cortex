@@ -4,14 +4,11 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { ShaderAnimation } from "@/components/ui/shader-lines";
 import { Starfield } from "@/components/ui/starfield";
 import { GlassEffect, GlassFilter } from "@/components/ui/liquid-glass";
-import { ProjectsPanel } from "@/components/ui/projects";
-import { Github, Mic, Send, Square, ArrowLeft, FolderOpen } from "lucide-react";
+import { Github, Mic, Send, Square, ArrowLeft } from "lucide-react";
 import { speakElevenLabs, type AudioReactiveHandle } from "@/lib/elevenlabs";
 import { chat } from "@/lib/llm";
 
 const EXPAND_THRESHOLD = 4;
-
-type View = "landing" | "chat" | "projects";
 
 interface Message {
   role: "user" | "assistant";
@@ -22,7 +19,7 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatOpen, setChatOpen] = useState(false);
-  const [view, setView] = useState<View>("landing");
+  const [expanded, setExpanded] = useState(false);
   const [manualCollapse, setManualCollapse] = useState(false);
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
@@ -35,19 +32,15 @@ export default function Home() {
   const audioHandleRef = useRef<AudioReactiveHandle | null>(null);
   const animFrameRef = useRef<number | null>(null);
 
-  const isExpanded = view === "chat" || view === "projects";
-
-  // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Auto-expand to chat when messages get long
   useEffect(() => {
-    if (messages.length >= EXPAND_THRESHOLD && view === "landing" && !manualCollapse) {
-      setView("chat");
+    if (messages.length >= EXPAND_THRESHOLD && !expanded && !manualCollapse) {
+      setExpanded(true);
     }
-  }, [messages, view, manualCollapse]);
+  }, [messages, expanded, manualCollapse]);
 
   /* ── Audio-reactive loop ─────────────────────────────────────── */
 
@@ -192,7 +185,7 @@ export default function Home() {
   }, [listening, startListening, stopListening]);
 
   const goBack = useCallback(() => {
-    setView("landing");
+    setExpanded(false);
     setManualCollapse(true);
   }, []);
 
@@ -250,22 +243,22 @@ export default function Home() {
       {/* ═══ AURORA ═══ */}
       <div
         className="absolute inset-0 z-[1] netflix-transition-slow"
-        style={{ opacity: isExpanded ? 0.35 : 1 }}
+        style={{ opacity: expanded ? 0.35 : 1 }}
       >
         <div
           className="absolute netflix-transition-slow"
           style={{
-            top: isExpanded ? "-25vh" : "50%",
-            left: isExpanded ? "-25vw" : "50%",
-            width: isExpanded ? "150vw" : "420px",
-            height: isExpanded ? "150vh" : "420px",
-            transform: isExpanded ? "none" : "translate(-50%, calc(-50% - 80px))",
+            top: expanded ? "-25vh" : "50%",
+            left: expanded ? "-25vw" : "50%",
+            width: expanded ? "150vw" : "420px",
+            height: expanded ? "150vh" : "420px",
+            transform: expanded ? "none" : "translate(-50%, calc(-50% - 80px))",
           }}
         >
           <ShaderAnimation
             speed={0.05}
             intensity={intensity}
-            expanded={isExpanded}
+            expanded={expanded}
             className="w-full h-full absolute inset-0"
           />
         </div>
@@ -274,13 +267,13 @@ export default function Home() {
           style={{
             top: "50%",
             left: "50%",
-            width: isExpanded ? "100vw" : "500px",
-            height: isExpanded ? "100vh" : "500px",
-            transform: isExpanded
+            width: expanded ? "100vw" : "500px",
+            height: expanded ? "100vh" : "500px",
+            transform: expanded
               ? "translate(-50%, -50%)"
               : `translate(-50%, calc(-50% - 80px)) scale(${1.15 + (intensity - 1) * 0.2})`,
             background: "radial-gradient(circle, rgba(56,189,248,0.06) 0%, transparent 70%)",
-            borderRadius: isExpanded ? "0" : "50%",
+            borderRadius: expanded ? "0" : "50%",
           }}
         />
       </div>
@@ -289,9 +282,9 @@ export default function Home() {
       <div
         className="netflix-transition-slow absolute inset-0 z-10 flex flex-col items-center justify-center pointer-events-none"
         style={{
-          opacity: view === "landing" ? 1 : 0,
-          transform: view === "landing" ? "scale(1)" : "scale(0.9)",
-          pointerEvents: view === "landing" ? "auto" : "none",
+          opacity: expanded ? 0 : 1,
+          transform: expanded ? "scale(0.9)" : "scale(1)",
+          pointerEvents: expanded ? "none" : "auto",
         }}
       >
         <div className="w-[340px] h-[340px] sm:w-[420px] sm:h-[420px]" />
@@ -312,7 +305,7 @@ export default function Home() {
         </div>
 
         <div className="w-full max-w-md px-4 mt-6">
-          {chatOpen && messages.length > 0 && view === "landing" && (
+          {chatOpen && messages.length > 0 && !expanded && (
             <div className="mb-3 max-h-48 overflow-y-auto space-y-3 chat-scroll">
               {messages.map((m, i) => (
                 <div
@@ -336,7 +329,7 @@ export default function Home() {
                   )}
                 </div>
               ))}
-              <div ref={view === "landing" ? messagesEndRef : undefined} />
+              <div ref={!expanded ? messagesEndRef : undefined} />
             </div>
           )}
           {inputBar}
@@ -348,9 +341,9 @@ export default function Home() {
       <div
         className="netflix-transition-slow absolute inset-0 z-20 flex flex-col"
         style={{
-          opacity: view === "chat" ? 1 : 0,
-          transform: view === "chat" ? "translateY(0)" : "translateY(40px)",
-          pointerEvents: view === "chat" ? "auto" : "none",
+          opacity: expanded ? 1 : 0,
+          transform: expanded ? "translateY(0)" : "translateY(40px)",
+          pointerEvents: expanded ? "auto" : "none",
         }}
       >
         <div className="flex items-center justify-between px-6 pt-5 pb-3">
@@ -415,7 +408,7 @@ export default function Home() {
             </div>
           )}
 
-          <div ref={view === "chat" ? messagesEndRef : undefined} />
+          <div ref={expanded ? messagesEndRef : undefined} />
         </div>
 
         <div className="px-6 pb-6 pt-2">
@@ -424,46 +417,20 @@ export default function Home() {
         </div>
       </div>
 
-      {/* ═══ PROJECTS VIEW ═══ */}
-      <div
-        className="netflix-transition-slow absolute inset-0 z-20 flex flex-col"
+      {/* GitHub (landing only) */}
+      <a
+        href="https://github.com/ansschh/cortex"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="netflix-transition fixed bottom-6 right-6 z-30 flex items-center gap-2 text-sm text-slate-500 hover:text-slate-300 transition-colors"
         style={{
-          opacity: view === "projects" ? 1 : 0,
-          transform: view === "projects" ? "translateY(0)" : "translateY(40px)",
-          pointerEvents: view === "projects" ? "auto" : "none",
+          opacity: expanded ? 0 : 1,
+          pointerEvents: expanded ? "none" : "auto",
         }}
       >
-        <ProjectsPanel onClose={goBack} />
-      </div>
-
-      {/* ═══ BOTTOM BAR (landing only) ═══ */}
-      <div
-        className="netflix-transition fixed bottom-6 left-0 right-0 z-30 flex items-center justify-between px-6"
-        style={{
-          opacity: view === "landing" ? 1 : 0,
-          pointerEvents: view === "landing" ? "auto" : "none",
-        }}
-      >
-        {/* Projects button */}
-        <button
-          onClick={() => setView("projects")}
-          className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-300 transition-colors"
-        >
-          <FolderOpen size={18} />
-          <span className="hidden sm:inline" style={{ fontWeight: 300 }}>Projects</span>
-        </button>
-
-        {/* GitHub */}
-        <a
-          href="https://github.com/ansschh/cortex"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-300 transition-colors"
-        >
-          <Github size={18} />
-          <span className="hidden sm:inline" style={{ fontWeight: 300 }}>GitHub</span>
-        </a>
-      </div>
+        <Github size={18} />
+        <span className="hidden sm:inline" style={{ fontWeight: 300 }}>GitHub</span>
+      </a>
     </main>
   );
 }
