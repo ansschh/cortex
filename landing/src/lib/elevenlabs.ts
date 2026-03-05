@@ -1,18 +1,12 @@
-const API_KEY = "sk_3d389eb62b782ad69b577f95f22acbaab332e5963a697a49";
-const VOICE_ID = "KLON7Nwan8mJxpF2R8Yw";
+const API_KEY = process.env.NEXT_PUBLIC_ELEVENLABS_API_KEY ?? "";
+const VOICE_ID = process.env.NEXT_PUBLIC_ELEVENLABS_VOICE_ID ?? "21m00Tcm4TlvDq8ikWAM";
 const API_URL = `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}/stream`;
 
 export interface AudioReactiveHandle {
-  /** Current RMS amplitude 0..1 */
   getAmplitude: () => number;
-  /** Stop playback */
   stop: () => void;
 }
 
-/**
- * Stream TTS from ElevenLabs → Web Audio API with an AnalyserNode
- * so we can read real amplitude for the aurora shader.
- */
 export async function speakElevenLabs(
   text: string,
   onStart: () => void,
@@ -29,7 +23,6 @@ export async function speakElevenLabs(
   const handle: AudioReactiveHandle = {
     getAmplitude: () => {
       analyser.getByteTimeDomainData(dataArray);
-      // Compute RMS
       let sum = 0;
       for (let i = 0; i < dataArray.length; i++) {
         const v = (dataArray[i] - 128) / 128;
@@ -41,6 +34,25 @@ export async function speakElevenLabs(
       audioCtx.close();
     },
   };
+
+  if (!API_KEY) {
+    console.warn("No ElevenLabs API key — falling back to browser TTS");
+    // Fallback to browser TTS with simulated amplitude
+    if (window.speechSynthesis) {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.05;
+      utterance.onstart = () => {
+        (handle as any)._speaking = true;
+        handle.getAmplitude = () => (handle as any)._speaking ? 0.1 + Math.random() * 0.2 : 0;
+        onStart();
+      };
+      utterance.onend = () => { (handle as any)._speaking = false; onEnd(); };
+      utterance.onerror = () => { (handle as any)._speaking = false; onEnd(); };
+      handle.stop = () => { window.speechSynthesis.cancel(); audioCtx.close(); };
+      window.speechSynthesis.speak(utterance);
+    }
+    return handle;
+  }
 
   try {
     const res = await fetch(API_URL, {
@@ -67,7 +79,6 @@ export async function speakElevenLabs(
       return handle;
     }
 
-    // Collect the full audio buffer (stream comes as chunked mp3)
     const arrayBuffer = await res.arrayBuffer();
     const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
 

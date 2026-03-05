@@ -1,4 +1,4 @@
-const API_KEY = "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";
+const API_KEY = process.env.NEXT_PUBLIC_OPENROUTER_API_KEY ?? "";
 const BASE_URL = "https://openrouter.ai/api/v1/chat/completions";
 const MODEL = "meta-llama/llama-3.3-70b-instruct";
 
@@ -24,6 +24,10 @@ Personality:
 export async function chat(
   messages: { role: "user" | "assistant"; text: string }[]
 ): Promise<string> {
+  if (!API_KEY) {
+    return "No API key configured. Set NEXT_PUBLIC_OPENROUTER_API_KEY in your .env.local file.";
+  }
+
   try {
     const res = await fetch(BASE_URL, {
       method: "POST",
