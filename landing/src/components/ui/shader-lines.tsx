@@ -11,7 +11,6 @@ declare global {
 interface ShaderAnimationProps {
   speed?: number;
   intensity?: number;
-  /** When true, removes sphere mask and uses finer lines */
   expanded?: boolean;
   className?: string;
 }
@@ -80,6 +79,7 @@ export function ShaderAnimation({
       resolution: { type: "v2", value: new THREE.Vector2() },
       intensity: { type: "f", value: intensity },
       expanded: { type: "f", value: 0.0 },
+      pulse: { type: "f", value: 0.0 },
     };
 
     const vertexShader = `void main() { gl_Position = vec4(position, 1.0); }`;
@@ -90,6 +90,7 @@ export function ShaderAnimation({
       uniform float time;
       uniform float intensity;
       uniform float expanded;
+      uniform float pulse;
 
       float random(in float x) {
         return fract(sin(x) * 1e4);
@@ -100,23 +101,25 @@ export function ShaderAnimation({
 
         float dist = length(uv);
 
-        // Sphere mask: fades out when expanded (ripples reach edges)
+        // Sphere mask with smooth alpha edges
         float sphereScale = 1.0 + (intensity - 1.0) * 0.25;
         float sphereDist = dist / sphereScale;
-        // When expanded=1, sphere=1 everywhere (no mask). When expanded=0, normal sphere mask.
-        float sphereMask = smoothstep(1.0, 0.45, sphereDist);
+        // Very wide, soft edge (0.3 range) — never a hard cutoff
+        float sphereMask = smoothstep(1.05, 0.35, sphereDist);
         float sphere = mix(sphereMask, 1.0, expanded);
 
-        // Edge fade for expanded mode — gentle vignette so it doesn't clip hard
+        // Expanded mode: gentle vignette
         float edgeFade = mix(1.0, smoothstep(1.8, 0.3, dist), expanded);
         sphere *= edgeFade;
 
-        vec3 bg = vec3(0.012, 0.027, 0.071);
-
-        if (sphere < 0.001) {
-          gl_FragColor = vec4(bg, 1.0);
+        if (sphere < 0.002) {
+          gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
           return;
         }
+
+        // Pulse: radially push/pull the distance used for line positions
+        // This makes lines breathe in and out with audio
+        float pulsedDist = dist + pulse * 0.15 * sin(dist * 6.0 - time * 0.3);
 
         vec2 screenSize = vec2(256.0, 256.0);
         vec2 mosaicScale = vec2(4.0, 2.0);
@@ -126,7 +129,7 @@ export function ShaderAnimation({
 
         float t = time * 0.04 + random(uvQ.x) * 0.4;
 
-        // Lines get much finer when expanded (0.0008 → 0.0002)
+        // Lines finer when expanded
         float baseWidth = mix(0.0008, 0.0002, expanded);
         float lineWidth = baseWidth * intensity;
 
@@ -135,7 +138,8 @@ export function ShaderAnimation({
           for (int i = 0; i < 5; i++) {
             float fi = float(i);
             float fj = float(j);
-            color[j] += lineWidth * fi * fi / abs(fract(t - 0.012 * fj + fi * 0.01) * 1.0 - dist);
+            // Use pulsedDist instead of dist for the line distance calc
+            color[j] += lineWidth * fi * fi / abs(fract(t - 0.012 * fj + fi * 0.01) * 1.0 - pulsedDist);
           }
         }
 
@@ -145,14 +149,16 @@ export function ShaderAnimation({
         aurora.g = color[1] * 0.6 + color[2] * 0.45;
         aurora.b = color[2] * 1.0 + color[1] * 0.35;
 
-        // Core glow — reduced when expanded
+        // Core glow
         float glowStrength = mix(0.15, 0.04, expanded);
         float coreGlow = exp(-dist * 2.5) * glowStrength * intensity;
         aurora += vec3(coreGlow * 0.75, coreGlow * 0.88, coreGlow);
 
         aurora *= sphere;
 
-        gl_FragColor = vec4(bg + aurora, 1.0);
+        // Output with alpha — edges fade to transparent, not to a bg color
+        float alpha = sphere;
+        gl_FragColor = vec4(aurora, alpha);
       }
     `;
 
@@ -160,12 +166,14 @@ export function ShaderAnimation({
       uniforms,
       vertexShader,
       fragmentShader,
+      transparent: true,
     });
 
     const mesh = new THREE.Mesh(geometry, material);
     scene.add(mesh);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setClearColor(0x000000, 0);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     container.appendChild(renderer.domElement);
 
@@ -192,23 +200,25 @@ export function ShaderAnimation({
     animate();
   };
 
-  // Drive intensity uniform
+  // Drive intensity + pulse uniforms together
   useEffect(() => {
     if (sceneRef.current.uniforms) {
       sceneRef.current.uniforms.intensity.value = intensity;
+      // pulse is driven by how far intensity is from idle (1.0)
+      // This makes lines breathe when audio is playing
+      sceneRef.current.uniforms.pulse.value = Math.max(0, intensity - 1.0);
     }
   }, [intensity]);
 
-  // Drive expanded uniform (smooth transition handled by animation loop)
+  // Smooth expanded transition
   useEffect(() => {
     const target = expanded ? 1.0 : 0.0;
     if (!sceneRef.current.uniforms) return;
 
-    // Animate the expanded uniform smoothly
     let current = sceneRef.current.uniforms.expanded.value;
     let raf: number;
     const ease = () => {
-      current += (target - current) * 0.04; // slow, smooth transition
+      current += (target - current) * 0.04;
       if (Math.abs(current - target) < 0.005) {
         current = target;
       }
